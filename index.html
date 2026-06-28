@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>躲避小遊戲</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f4f8; font-family: 'Inter', sans-serif; }
+        #game-container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        canvas { background: white; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); cursor: none; }
+        .ui-overlay { position: absolute; text-align: center; pointer-events: none; background: rgba(255, 255, 255, 0.98); padding: 2rem; border-radius: 1rem; width: 90%; max-width: 400px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui" class="ui-overlay">
+            <h1 id="msg" class="text-3xl font-bold text-gray-800 mb-4">躲避紅方塊</h1>
+            
+            <div id="nameInputGroup" class="hidden mb-6">
+                <input type="text" id="playerName" placeholder="輸入你的名字" maxlength="10" class="border p-2 rounded w-full mb-2 pointer-events-auto">
+                <button id="saveScoreBtn" class="pointer-events-auto bg-green-500 text-white px-6 py-2 rounded-full w-full hover:bg-green-600 transition">儲存成績</button>
+            </div>
+
+            <div id="leaderboard" class="mb-6 hidden">
+                <h2 class="text-lg font-semibold text-gray-700 mb-2">最高分排行榜</h2>
+                <ul id="scoreList" class="text-gray-600 text-left"></ul>
+            </div>
+
+            <button id="startBtn" class="pointer-events-auto bg-blue-500 hover:bg-blue-600 text-white px-8 py-3 rounded-full text-xl shadow-lg transition">開始遊戲</button>
+        </div>
+        <div id="scoreBoard" class="absolute top-5 left-5 text-2xl font-bold text-gray-600 hidden">分數: <span id="score">0</span></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const scoreBoard = document.getElementById('scoreBoard');
+        const ui = document.getElementById('ui');
+        const msg = document.getElementById('msg');
+        const startBtn = document.getElementById('startBtn');
+        const leaderboard = document.getElementById('leaderboard');
+        const scoreList = document.getElementById('scoreList');
+        const nameInputGroup = document.getElementById('nameInputGroup');
+        const playerNameInput = document.getElementById('playerName');
+        const saveScoreBtn = document.getElementById('saveScoreBtn');
+
+        let isRunning = false;
+        let score = 0;
+        let speedMultiplier = 1;
+        let player = { x: 0, y: 0, radius: 15 };
+        let enemies = [];
+        let keys = { ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false };
+
+        function getHighScores() {
+            return JSON.parse(localStorage.getItem('dodgeGame_highScores') || '[]');
+        }
+
+        function saveHighScore(name, score) {
+            let scores = getHighScores();
+            scores.push({ name, score });
+            scores.sort((a, b) => b.score - a.score);
+            scores = scores.slice(0, 5);
+            localStorage.setItem('dodgeGame_highScores', JSON.stringify(scores));
+        }
+
+        function renderLeaderboard() {
+            const scores = getHighScores();
+            if (scores.length > 0) {
+                leaderboard.classList.remove('hidden');
+                scoreList.innerHTML = scores.map((s, i) => `<li class="py-1 border-b">${i + 1}. ${s.name}: ${s.score} 分</li>`).join('');
+            }
+        }
+
+        function resize() {
+            canvas.width = Math.min(window.innerWidth * 0.9, 600);
+            canvas.height = Math.min(window.innerHeight * 0.8, 800);
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 2;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        window.addEventListener('keydown', (e) => keys[e.key] = true);
+        window.addEventListener('keyup', (e) => keys[e.key] = false);
+
+        function spawnEnemy() {
+            const size = 20 + Math.random() * 20;
+            const side = Math.floor(Math.random() * 4);
+            let x, y, vx, vy;
+            const speed = (2 + Math.random() * 2) * speedMultiplier;
+
+            if (side === 0) { x = -size; y = Math.random() * canvas.height; vx = speed; vy = (Math.random() - 0.5) * 2; } 
+            else if (side === 1) { x = canvas.width + size; y = Math.random() * canvas.height; vx = -speed; vy = (Math.random() - 0.5) * 2; }
+            else if (side === 2) { x = Math.random() * canvas.width; y = -size; vx = (Math.random() - 0.5) * 2; vy = speed; }
+            else { x = Math.random() * canvas.width; y = canvas.height + size; vx = (Math.random() - 0.5) * 2; vy = -speed; }
+
+            enemies.push({ x, y, vx, vy, size });
+        }
+
+        function update() {
+            if (!isRunning) return;
+
+            if (keys.ArrowLeft && player.x > player.radius) player.x -= 7;
+            if (keys.ArrowRight && player.x < canvas.width - player.radius) player.x += 7;
+            if (keys.ArrowUp && player.y > player.radius) player.y -= 7;
+            if (keys.ArrowDown && player.y < canvas.height - player.radius) player.y += 7;
+
+            enemies.forEach((en, index) => {
+                en.x += en.vx;
+                en.y += en.vy;
+
+                // 碰撞檢測 - 將距離判定調大 2px 以增加靈敏度
+                const dx = player.x - (en.x + en.size / 2);
+                const dy = player.y - (en.y + en.size / 2);
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < player.radius + en.size / 2 - 2) {
+                    gameOver();
+                }
+
+                if (en.x < -100 || en.x > canvas.width + 100 || en.y < -100 || en.y > canvas.height + 100) {
+                    enemies.splice(index, 1);
+                    score++;
+                    scoreEl.innerText = score;
+                    speedMultiplier += 0.02;
+                }
+            });
+
+            if (Math.random() < 0.04) spawnEnemy();
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#3b82f6';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#ef4444';
+            enemies.forEach(en => {
+                ctx.fillRect(en.x, en.y, en.size, en.size);
+            });
+        }
+
+        function gameOver() {
+            isRunning = false;
+            msg.innerText = '遊戲結束！分數: ' + score;
+            ui.classList.remove('hidden');
+            startBtn.classList.add('hidden');
+            nameInputGroup.classList.remove('hidden');
+            playerNameInput.focus();
+            renderLeaderboard();
+        }
+
+        saveScoreBtn.onclick = () => {
+            const name = playerNameInput.value.trim() || '無名氏';
+            saveHighScore(name, score);
+            nameInputGroup.classList.add('hidden');
+            startBtn.classList.remove('hidden');
+            startBtn.innerText = '再試一次';
+            renderLeaderboard();
+        };
+
+        startBtn.onclick = () => {
+            score = 0;
+            speedMultiplier = 1;
+            enemies = [];
+            scoreEl.innerText = '0';
+            scoreBoard.classList.remove('hidden');
+            ui.classList.add('hidden');
+            leaderboard.classList.add('hidden');
+            isRunning = true;
+            update();
+        };
+    </script>
+</body>
+</html>
